@@ -1,17 +1,17 @@
 -- This file was automatically generated for the LuaDist project.
 
 package = "lua-websockets"
-version = "v2.1-1"
+version = "v2.2-1"
 
 -- LuaDist source
 source = {
-  tag = "v2.1-1",
+  tag = "v2.2-1",
   url = "git://github.com/LuaDist-testing/lua-websockets.git"
 }
 -- Original source
 -- source = {
---    url = "git://github.com/lipp/lua-websockets.git",
---    tag = "v2.1"
+--    url = "git://github.com/lipp/lua-websockets.git",     
+--    tag = "v2.2"
 -- }
 
 description = {
@@ -23,7 +23,6 @@ description = {
 
 dependencies = {
   "lua >= 5.1",
-  "struct",
   "luasocket",
   "luabitop",
   "copas"
