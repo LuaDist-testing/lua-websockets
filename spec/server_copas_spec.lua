@@ -1,10 +1,9 @@
-package.path = package.path..'../src'
-
 local websocket = require'websocket'
 local server = require'websocket.server'
 local client = require'websocket.client'
 local port = os.getenv('LUAWS_SERVER_COPAS_PORT') or 8084
 local url = 'ws://localhost:'..port
+local socket = require'socket'
 
 local copas = require'copas'
 
@@ -64,7 +63,7 @@ describe(
       function()
         local s
         local on_new_echo_client
-        before(
+        setup(
           function()
             s = server.copas.listen
             {
@@ -78,10 +77,22 @@ describe(
           end)
         
         it(
+          'client:connect forwards socket error',
+          function()
+            local wsc = client.copas()
+            local ok,err = wsc:connect('ws://nonexisting.foo:'..port)
+            assert.is_nil(ok)
+            if socket.tcp6 then
+              assert.is_equal(err,'host or service not provided, or not known')
+            else
+              assert.is_equal(err,'host not found')
+            end
+          end)
+        
+        it(
           'handshake works with clean close (server inits close)',
-          async,
           function(done)
-            on_new_echo_client = guard(function(client)
+            on_new_echo_client = async(function(client)
                 assert.is_table(client)
                 assert.is_function(client.receive)
                 assert.is_function(client.close)
@@ -93,7 +104,7 @@ describe(
                 done()
               end)
             
-            copas.addthread(guard(function()
+            copas.addthread(async(function()
                   local wsc = client.copas()
                   local ok,err = wsc:connect('ws://localhost:'..port,'echo')
                   assert.is_true(ok)
@@ -106,9 +117,8 @@ describe(
         
         it(
           'handshake works with clean close (client inits close)',
-          async,
           function(done)
-            on_new_echo_client = guard(function(client)
+            on_new_echo_client = async(function(client)
                 assert.is_table(client)
                 assert.is_function(client.receive)
                 assert.is_function(client.close)
@@ -122,7 +132,7 @@ describe(
                 done()
               end)
             
-            copas.addthread(guard(function()
+            copas.addthread(async(function()
                   local wsc = client.copas()
                   local ok = wsc:connect('ws://localhost:'..port,'echo')
                   assert.is_true(ok)
@@ -135,9 +145,8 @@ describe(
         
         it(
           'echo works',
-          async,
           function(done)
-            on_new_echo_client = guard(
+            on_new_echo_client = async(
               function(client)
                 local message = client:receive()
                 client:send(message)
@@ -145,7 +154,7 @@ describe(
               end)
             
             copas.addthread(
-              guard(
+              async(
                 function()
                   local wsc = client.copas()
                   local hello = 'Hello'
@@ -169,9 +178,8 @@ describe(
         
         it(
           'echo 127 bytes works',
-          async,
           function(done)
-            on_new_echo_client = guard(
+            on_new_echo_client = async(
               function(client)
                 local message = client:receive()
                 client:send(message)
@@ -179,7 +187,7 @@ describe(
               end)
             
             copas.addthread(
-              guard(
+              async(
                 function()
                   local wsc = client.copas()
                   wsc:connect('ws://localhost:'..port,'echo')
@@ -194,9 +202,8 @@ describe(
         
         it(
           'echo 0xffff-1 bytes works',
-          async,
           function(done)
-            on_new_echo_client = guard(
+            on_new_echo_client = async(
               function(client)
                 local message = client:receive()
                 client:send(message)
@@ -204,7 +211,7 @@ describe(
               end)
             
             copas.addthread(
-              guard(
+              async(
                 function()
                   local wsc = client.copas()
                   wsc:connect('ws://localhost:'..port,'echo')
@@ -219,17 +226,17 @@ describe(
         
         it(
           'echo 0xffff+1 bytes works',
-          async,
           function(done)
-            on_new_echo_client = guard(
+            on_new_echo_client = async(
               function(client)
                 local message = client:receive()
                 client:send(message)
-                client:close()
+                local was_clean = client:close()
+                assert.is_true(was_clean)
               end)
             
             copas.addthread(
-              guard(
+              async(
                 function()
                   local wsc = client.copas()
                   wsc:connect('ws://localhost:'..port,'echo')
@@ -237,58 +244,66 @@ describe(
                   wsc:send(message)
                   local echoed = wsc:receive()
                   assert.is_same(message,echoed)
-                  wsc:close()
+                  local echoed,_,was_clean = wsc:receive()
+                  assert.is_nil(echoed)
+                  assert.is_true(was_clean)
                   done()
               end))
           end)
         
         it(
           'broadcast works',
-          async,
           function(done)
+            local n = 20
             local n_clients = 0
-            on_new_echo_client = guard(
+            local closed = 0
+            on_new_echo_client = async(
               function(client)
                 n_clients = n_clients + 1
-                if n_clients == 2 then
+                if n_clients == n then
                   client:broadcast('hello broadcast')
                 end
-                local message,opcode,was_clean,code,reason = client:receive()
+                client.id = n_clients
+                local message,opcode,was_clean = client:receive()
                 assert.is_nil(message)
                 assert.is_nil(opcode)
                 assert.is_true(was_clean)
-                n_clients = n_clients -1
-                if n_clients == 0 then
+                n_clients = n_clients - 1
+                if n_clients == 0 and closed == n then
                   done()
                 end
               end)
             
-            for i=1,2 do
+            for i=1,n do
               copas.addthread(
-                guard(
+                async(
                   function()
                     local wsc = client.copas()
-                    local ok = wsc:connect('ws://localhost:'..port,'echo')
+                    local ok,err = wsc:connect('ws://localhost:'..port,'echo')
+                    assert.is_nil(err)
                     assert.is_true(ok)
                     local message,opcode = wsc:receive()
                     assert.is_same(message,'hello broadcast')
                     assert.is_same(opcode,websocket.TEXT)
                     local was_clean = wsc:close()
                     assert.is_true(was_clean)
+                    closed = closed + 1
+                    if n_clients == 0 and closed == n then
+                      done()
+                    end
                 end))
             end
           end)
         
-        after(
+        teardown(
           function()
-            s:close()
+            s:close(true)
           end)
         
       end)
     
     it(
       'on_error is called if request is incomplete due to socket close',
-      async,
       function(done)
         local serv
         serv = server.copas.listen
@@ -298,7 +313,7 @@ describe(
             echo = function(client)
             end
           },
-          on_error = guard(function(err)
+          on_error = async(function(err)
               assert.is_string(err)
               serv:close()
               done()
@@ -312,7 +327,6 @@ describe(
     
     it(
       'on_error is called if request is invalid',
-      async,
       function(done)
         local serv = server.copas.listen
         {
@@ -323,7 +337,7 @@ describe(
           },
           on_error = function() end
         }
-        copas.addthread(guard(function()
+        copas.addthread(async(function()
               local s = socket.tcp()
               copas.connect(s,'localhost',port)
               copas.send(s,'GET / HTTP/1.1\r\n\r\n')
@@ -339,18 +353,17 @@ describe(
     
     it(
       'default handler gets called when no protocol specified',
-      async,
       function(done)
         local serv
         serv = server.copas.listen
         {
           port = port,
           protocols = {
-            echo = guard(function()
+            echo = async(function()
                 assert.is_nil('should not happen')
               end)
           },
-          default = guard(function(client)
+          default = async(function(client)
               client:send('hello default')
               local message,opcode,was_clean = client:receive()
               assert.is_nil(message)
@@ -358,7 +371,7 @@ describe(
               assert.is_true(was_clean)
             end),
         }
-        copas.addthread(guard(function()
+        copas.addthread(async(function()
               local wsc = client.copas()
               local ok = wsc:connect('ws://localhost:'..port)
               assert.is_true(ok)
@@ -372,7 +385,6 @@ describe(
     
     it(
       'closing server closes all clients',
-      async,
       function(done)
         local clients = 0
         local closed = 0
@@ -382,10 +394,10 @@ describe(
         {
           port = port,
           protocols = {
-            echo = guard(function(client)
+            echo = async(function(client)
                 clients = clients + 1
                 if clients == n then
-                  copas.addthread(guard(function()
+                  copas.addthread(async(function()
                         serv:close()
                         assert.is_equal(closed,n)
                         done()
@@ -396,7 +408,7 @@ describe(
         }
         
         for i=1,n do
-          copas.addthread(guard(function()
+          copas.addthread(async(function()
                 local wsc = client.copas()
                 local ok = wsc:connect('ws://localhost:'..port,'echo')
                 assert.is_true(ok)

@@ -1,29 +1,29 @@
 -- This file was automatically generated for the LuaDist project.
 
 package = "lua-websockets"
-version = "v2.0-1"
+version = "v2.1-1"
 
 -- LuaDist source
 source = {
-  tag = "v2.0-1",
+  tag = "v2.1-1",
   url = "git://github.com/LuaDist-testing/lua-websockets.git"
 }
 -- Original source
 -- source = {
---    url = "git://github.com/lipp/lua-websockets.git",     
---    tag = "v2.0"
+--    url = "git://github.com/lipp/lua-websockets.git",
+--    tag = "v2.1"
 -- }
 
 description = {
   summary = "Websockets for Lua",
   homepage = "http://github.com/lipp/lua-websockets",
   license = "MIT/X11",
-  detailed = "Provides sync and async clients and servers for copas."
+  detailed = "Provides sync and async clients and servers for copas and lua-ev."
 }
 
 dependencies = {
   "lua >= 5.1",
-  "lpack",
+  "struct",
   "luasocket",
   "luabitop",
   "copas"

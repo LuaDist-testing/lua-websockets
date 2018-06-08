@@ -1,10 +1,10 @@
-package.path = package.path..'../src'
-
 local server = require'websocket.server'
 local client = require'websocket.client'
+local socket = require'socket'
 local ev = require'ev'
+local loop = ev.Loop.default
 local port = os.getenv('LUAWS_SERVER_EV_PORT') or 8083
-local url = 'ws://localhost:'..port
+local url = 'ws://127.0.0.1:'..port
 
 setloop('ev')
 
@@ -30,6 +30,19 @@ describe(
         }
         s:close()
       end)
+    
+    it(
+      's:sock() provides access to the listening socket',
+      function()
+        local s = server.ev.listen
+        {
+          default = function() end,
+          port = port
+        }
+        assert.is_truthy(tostring(s:sock()):match('tcp'))
+        s:close()
+      end)
+    
     
     it(
       'call listen with protocol handlers',
@@ -61,7 +74,7 @@ describe(
       function()
         local s
         local on_new_echo_client
-        before(
+        setup(
           function()
             s = server.ev.listen
             {
@@ -74,26 +87,46 @@ describe(
             }
           end)
         
-        after(
+        teardown(
           function()
             s:close()
           end)
         
         it(
+          'accepts socket connection and does not die when abruptly closing',
+          function(done)
+            local sock = socket.tcp()
+            s:on_error(async(function()
+                  s:on_error(nil)
+                  done()
+              end))
+            sock:settimeout(0)
+            local connected,err = sock:connect('127.0.0.1',port)
+            local connect_io = ev.IO.new(async(function(loop,io)
+                  io:stop(loop)
+                  sock:close()
+              end),sock:getfd(),ev.WRITE)
+            if connected then
+              connect_io:callback()(loop,connect_io)
+            else
+              connect_io:start(loop)
+            end
+          end)
+        
+        it(
           'open and close handshake work (client closes)',
-          async,
           function(done)
             local wsc = client.ev()
-            on_new_echo_client = guard(
+            on_new_echo_client = async(
               function(client)
                 assert.is_same(type(client),'table')
                 assert.is_same(type(client.on_message),'function')
                 assert.is_same(type(client.close),'function')
                 assert.is_same(type(client.send),'function')
               end)
-            wsc:on_open(guard(
+            wsc:on_open(async(
                 function()
-                  wsc:on_close(guard(function(_,was_clean,code,reason)
+                  wsc:on_close(async(function(_,was_clean,code,reason)
                         assert.is_true(was_clean)
                         assert.is_true(code >= 1000)
                         assert.is_string(reason)
@@ -106,16 +139,19 @@ describe(
         
         it(
           'open and close handshake work (server closes)',
-          async,
           function(done)
             local wsc = client.ev()
-            on_new_echo_client = guard(
+            on_new_echo_client = async(
               function(client)
                 assert.is_same(type(client),'table')
                 assert.is_same(type(client.on_message),'function')
                 assert.is_same(type(client.close),'function')
                 assert.is_same(type(client.send),'function')
-                client:on_close(guard(function(_,was_clean,code,reason)
+                client:on_close(async(function(_,was_clean,code,reason)
+                      -- this is for hunting down some rare bug
+                      if not was_clean then
+                        print(debug.traceback('',2))
+                      end
                       assert.is_true(was_clean)
                       assert.is_true(code >= 1000)
                       assert.is_string(reason)
@@ -128,24 +164,23 @@ describe(
         
         it(
           'echo works',
-          async,
           function(done)
             local wsc = client.ev()
-            on_new_echo_client = guard(
+            on_new_echo_client = async(
               function(client)
                 client:on_message(
-                  guard(
+                  async(
                     function(self,msg)
                       assert.is_equal(self,client)
                       self:send('Hello')
                   end))
               end)
-            wsc:on_open(guard(
+            wsc:on_open(async(
                 function(self)
                   assert.is_equal(self,wsc)
                   self:send('Hello')
                   self:on_message(
-                    guard(
+                    async(
                       function(_,message)
                         assert.is_same(message,'Hello')
                         self:close()
@@ -165,26 +200,25 @@ describe(
         
         it(
           'echo works with 127 byte messages',
-          async,
           function(done)
             local message = random_text(127)
             local wsc = client.ev()
-            on_new_echo_client = guard(
+            on_new_echo_client = async(
               function(client)
                 client:on_message(
-                  guard(
+                  async(
                     function(self,msg)
                       assert.is_equal(self,client)
                       self:send(message)
                   end))
               end)
             
-            wsc:on_open(guard(
+            wsc:on_open(async(
                 function(self)
                   assert.is_equal(self,wsc)
                   self:send(message)
                   self:on_message(
-                    guard(
+                    async(
                       function(_,echoed)
                         assert.is_same(message,echoed)
                         self:close()
@@ -196,26 +230,26 @@ describe(
         
         it(
           'echo works with 0xffff-1 byte messages',
-          async,
           function(done)
+            settimeout(3.0)
             local message = random_text(0xffff-1)
             local wsc = client.ev()
-            on_new_echo_client = guard(
+            on_new_echo_client = async(
               function(client)
                 client:on_message(
-                  guard(
+                  async(
                     function(self,msg)
                       assert.is_equal(self,client)
                       self:send(message)
                   end))
               end)
             
-            wsc:on_open(guard(
+            wsc:on_open(async(
                 function(self)
                   assert.is_equal(self,wsc)
                   self:send(message)
                   self:on_message(
-                    guard(
+                    async(
                       function(_,echoed)
                         assert.is_same(message,echoed)
                         self:close()
@@ -228,26 +262,26 @@ describe(
         
         it(
           'echo works with 0xffff+1 byte messages',
-          async,
           function(done)
+            settimeout(3.0)
             local message = random_text(0xffff+1)
             local wsc = client.ev()
-            on_new_echo_client = guard(
+            on_new_echo_client = async(
               function(client)
                 client:on_message(
-                  guard(
+                  async(
                     function(self,msg)
                       assert.is_equal(self,client)
                       self:send(message)
                   end))
               end)
             
-            wsc:on_open(guard(
+            wsc:on_open(async(
                 function(self)
                   assert.is_equal(self,wsc)
                   self:send(message)
                   self:on_message(
-                    guard(
+                    async(
                       function(_,echoed)
                         assert.is_same(message,echoed)
                         self:close()

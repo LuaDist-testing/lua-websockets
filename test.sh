@@ -1,13 +1,11 @@
 #!/bin/bash
 killall wstest 2>/dev/null
-wstest -m echoserver -w ws://localhost:${LUAWS_WSTEST_PORT:=8081}  &
+wstest -m echoserver -w ws://localhost:${LUAWS_WSTEST_PORT:=11000}  &
 pid=$!
-sleep 3
-rm luacov.* 2>/dev/null
-busted -c spec/
+echo "Waiting for wstest to start..."
+sleep 10
+busted spec/
 bustedcode=$?
-echo "code coverage"
-tail -n 15 luacov.report.out
 kill ${pid}
 exit $bustedcode
 

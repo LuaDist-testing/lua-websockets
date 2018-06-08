@@ -9,6 +9,7 @@ local ev
 local loop
 
 local clients = {}
+clients[true] = {}
 
 local client = function(sock,protocol)
   assert(sock)
@@ -21,7 +22,9 @@ local client = function(sock,protocol)
   self.state = 'OPEN'
   local user_on_error
   local on_error = function(s,err)
-    clients[protocol][self] = nil
+    if clients[protocol] ~= nil and clients[protocol][self] ~= nil then
+      clients[protocol][self] = nil
+    end
     if user_on_error then
       user_on_error(self,err)
     else
@@ -30,7 +33,9 @@ local client = function(sock,protocol)
   end
   local user_on_close
   local on_close = function(was_clean,code,reason)
-    clients[protocol][self] = nil
+    if clients[protocol] ~= nil and clients[protocol][self] ~= nil then
+      clients[protocol][self] = nil
+    end
     if close_timer then
       close_timer:stop(loop)
       close_timer = nil
@@ -53,12 +58,12 @@ local client = function(sock,protocol)
       on_error(err)
     end
   end
-  local user_on_message
+  local user_on_message = function() end
+  local TEXT = frame.TEXT
+  local BINARY = frame.BINARY
   local on_message = function(message,opcode)
-    if opcode == frame.TEXT or opcode == frame.BINARY then
-      if user_on_message then
-        user_on_message(self,message,opcode)
-      end
+    if opcode == TEXT or opcode == BINARY then
+      user_on_message(self,message,opcode)
     elseif opcode == frame.CLOSE then
       if self.state ~= 'CLOSING' then
         self.state = 'CLOSING'
@@ -70,7 +75,7 @@ local client = function(sock,protocol)
             on_close(true,code or 1006,reason)
           end,handle_sock_err)
       else
-        on_close(true,code or 1006,reason)
+        on_close(true,1006,'')
       end
     end
   end
@@ -101,7 +106,9 @@ local client = function(sock,protocol)
   end
   
   self.close = function(_,code,reason,timeout)
-    clients[protocol][self] = nil
+    if clients[protocol] ~= nil and clients[protocol][self] ~= nil then
+      clients[protocol][self] = nil
+    end
     if not message_io then
       self:start()
     end
@@ -135,7 +142,14 @@ local listen = function(opts)
   assert(opts and (opts.protocols or opts.default))
   ev = require'ev'
   loop = opts.loop or ev.Loop.default
-  local on_error = function(s,err) print(err) end
+  local user_on_error
+  local on_error = function(s,err)
+    if user_on_error then
+      user_on_error(s,err)
+    else
+      print(err)
+    end
+  end
   local protocols = {}
   if opts.protocols then
     for protocol in pairs(opts.protocols) do
@@ -144,15 +158,26 @@ local listen = function(opts)
     end
   end
   local self = {}
+  self.on_error = function(self,on_error)
+    user_on_error = on_error
+  end
   local listener,err = socket.bind(opts.interface or '*',opts.port or 80)
-  assert(listener,err)
+  if not listener then
+    error(err)
+  end
   listener:settimeout(0)
+  
+  self.sock = function()
+    return listener
+  end
+  
   local listen_io = ev.IO.new(
     function()
       local client_sock = listener:accept()
       client_sock:settimeout(0)
       assert(client_sock)
       local request = {}
+      local last
       ev.IO.new(
         function(loop,read_io)
           repeat
@@ -191,17 +216,27 @@ local listen = function(opts)
                 print('Websocket client closed while handshake',err)
               elseif sent == len then
                 write_io:stop(loop)
+                local handler
+                local new_client
+                local protocol_index
                 if protocol and opts.protocols[protocol] then
-                  local new_client = client(client_sock,protocol)
-                  clients[protocol][new_client] = true
-                  opts.protocols[protocol](new_client)
-                  new_client:start()
+                  protocol_index = protocol
+                  handler = opts.protocols[protocol]
                 elseif opts.default then
-                  local new_client = client(client_sock)
-                  opts.default(new_client)
+                  -- true is the 'magic' index for the default handler
+                  protocol_index = true
+                  handler = opts.default
                 else
-                  print('Unsupported protocol:',protocol or '"null"')
+                  client_sock:close()
+                  if on_error then
+                    on_error('bad protocol')
+                  end
+                  return
                 end
+                new_client = client(client_sock,protocol_index)
+                clients[protocol_index][new_client] = true
+                handler(new_client)
+                new_client:start(loop)
               else
                 assert(sent < len)
                 index = sent

@@ -2,6 +2,21 @@ local ev = require'ev'
 local frame = require'websocket.frame'
 local tinsert = table.insert
 local tconcat = table.concat
+local eps = 2^-40
+
+local detach = function(f,loop)
+  if ev.Idle then
+    ev.Idle.new(function(loop,io)
+        io:stop(loop)
+        f()
+      end):start(loop)
+  else
+    ev.Timer.new(function(loop,io)
+        io:stop(loop)
+        f()
+      end,eps):start(loop)
+  end
+end
 
 local async_send = function(sock,loop)
   assert(sock)
@@ -12,21 +27,40 @@ local async_send = function(sock,loop)
   local callbacks = {}
   local send = function(loop,write_io)
     local len = #buffer
-    local sent,err = sock_send(sock,buffer,index)
+    local sent,err,last = sock_send(sock,buffer,index)
     if not sent and err ~= 'timeout' then
       write_io:stop(loop)
       if callbacks.on_err then
-        callbacks.on_err(err)
+        if write_io:is_active() then
+          callbacks.on_err(err)
+        else
+          detach(function()
+              callbacks.on_err(err)
+            end,loop)
+        end
       end
-    elseif sent == len then
+    elseif sent then
+      local copy = buffer
       buffer = nil
+      index = nil
       write_io:stop(loop)
       if callbacks.on_sent then
-        callbacks.on_sent()
+        -- detach calling callbacks.on_sent from current
+        -- exection if thiis call context is not
+        -- the send io to let send_async(_,on_sent,_) truely
+        -- behave async.
+        if write_io:is_active() then
+          
+          callbacks.on_sent(copy)
+        else
+          detach(function()
+              callbacks.on_sent(copy)
+            end,loop)
+        end
       end
     else
-      assert(sent < len)
-      index = sent
+      assert(last < len)
+      index = last + 1
     end
   end
   local io = ev.IO.new(send,sock:getfd(),ev.WRITE)
@@ -45,7 +79,12 @@ local async_send = function(sock,loop)
     end
     callbacks.on_sent = on_sent
     callbacks.on_err = on_err
-    io:start(loop)
+    if not io:is_active() then
+      send(loop,io)
+      if index ~= nil then
+        io:start(loop)
+      end
+    end
   end
   return send_async,stop
 end
